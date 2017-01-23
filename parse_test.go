@@ -24,6 +24,8 @@ var listTests = []line{
 	// UNIX ls -l style
 	{"drwxr-xr-x    3 110      1002            3 Dec 02  2009 pub", "pub", 0, EntryTypeFolder, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
 	{"drwxr-xr-x    3 110      1002            3 Dec 02  2009 p u b", "p u b", 0, EntryTypeFolder, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
+	{"-rw-r--r--   1 marketwired marketwired    12016 Mar 16  2016 2016031611G087802-001.newsml", "2016031611G087802-001.newsml", 12016, EntryTypeFile, time.Date(2016, time.March, 16, 0, 0, 0, 0, time.UTC)},
+
 	{"-rwxr-xr-x    3 110      1002            1234567 Dec 02  2009 fileName", "fileName", 1234567, EntryTypeFile, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
 	{"lrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", "bin -> usr/bin", 0, EntryTypeLink, time.Date(thisYear, time.January, 25, 0, 17, 0, 0, time.UTC)},
 
@@ -53,6 +55,7 @@ var listTests = []line{
 	// dir and file names that contain multiple spaces
 	{"drwxr-xr-x    3 110      1002            3 Dec 02  2009 spaces   dir   name", "spaces   dir   name", 0, EntryTypeFolder, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
 	{"-rwxr-xr-x    3 110      1002            1234567 Dec 02  2009 file   name", "file   name", 1234567, EntryTypeFile, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
+	{"-rwxr-xr-x    3 110      1002            1234567 Dec 02  2009  foo bar ", " foo bar ", 1234567, EntryTypeFile, time.Date(2009, time.December, 2, 0, 0, 0, 0, time.UTC)},
 }
 
 // Not supported, we expect a specific error message
