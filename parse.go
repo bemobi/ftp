@@ -17,6 +17,7 @@ var listLineParsers = []func(line string) (*Entry, error){
 
 var dirTimeFormats = []string{
 	"01-02-06  03:04PM",
+	"01-02-2006  03:04PM",
 	"2006-01-02  15:04",
 }
 
