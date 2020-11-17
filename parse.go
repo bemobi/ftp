@@ -8,9 +8,11 @@ import (
 	"time"
 )
 
-var errUnsupportedListLine = errors.New("Unsupported LIST line")
+var errUnsupportedListLine = errors.New("unsupported LIST line")
+var errUnsupportedListDate = errors.New("unsupported LIST date")
+var errUnknownListEntryType = errors.New("unknown entry type")
 
-type parseFunc func(string, time.Time) (*Entry, error)
+type parseFunc func(string, time.Time, *time.Location) (*Entry, error)
 
 var listLineParsers = []parseFunc{
 	parseRFC3659ListLine,
@@ -26,7 +28,7 @@ var dirTimeFormats = []string{
 }
 
 // parseRFC3659ListLine parses the style of directory line defined in RFC 3659.
-func parseRFC3659ListLine(line string, now time.Time) (*Entry, error) {
+func parseRFC3659ListLine(line string, now time.Time, loc *time.Location) (*Entry, error) {
 	iSemicolon := strings.Index(line, ";")
 	iWhitespace := strings.Index(line, " ")
 
@@ -50,7 +52,7 @@ func parseRFC3659ListLine(line string, now time.Time) (*Entry, error) {
 		switch key {
 		case "modify":
 			var err error
-			e.Time, err = time.Parse("20060102150405", value)
+			e.Time, err = time.ParseInLocation("20060102150405", value, loc)
 			if err != nil {
 				return nil, err
 			}
@@ -70,10 +72,12 @@ func parseRFC3659ListLine(line string, now time.Time) (*Entry, error) {
 
 // parseLsListLine parses a directory line in a format based on the output of
 // the UNIX ls command.
-func parseLsListLine(line string, now time.Time) (*Entry, error) {
+func parseLsListLine(line string, now time.Time, loc *time.Location) (*Entry, error) {
 
-	// Has the first field a length of 10 bytes?
-	if strings.IndexByte(line, ' ') != 10 {
+	// Has the first field a length of exactly 10 bytes
+	// - or 10 bytes with an additional '+' character for indicating ACLs?
+	// If not, return.
+	if i := strings.IndexByte(line, ' '); !(i == 10 || (i == 11 && line[10] == '+')) {
 		return nil, errUnsupportedListLine
 	}
 
@@ -89,7 +93,7 @@ func parseLsListLine(line string, now time.Time) (*Entry, error) {
 			Type: EntryTypeFolder,
 			Name: scanner.Remaining(),
 		}
-		if err := e.setTime(fields[3:6], now); err != nil {
+		if err := e.setTime(fields[3:6], now, loc); err != nil {
 			return nil, err
 		}
 
@@ -106,7 +110,7 @@ func parseLsListLine(line string, now time.Time) (*Entry, error) {
 		if err := e.setSize(fields[2]); err != nil {
 			return nil, errUnsupportedListLine
 		}
-		if err := e.setTime(fields[4:7], now); err != nil {
+		if err := e.setTime(fields[4:7], now, loc); err != nil {
 			return nil, err
 		}
 
@@ -132,11 +136,17 @@ func parseLsListLine(line string, now time.Time) (*Entry, error) {
 		e.Type = EntryTypeFolder
 	case 'l':
 		e.Type = EntryTypeLink
+
+		// Split link name and target
+		if i := strings.Index(e.Name, " -> "); i > 0 {
+			e.Target = e.Name[i+4:]
+			e.Name = e.Name[:i]
+		}
 	default:
-		return nil, errors.New("Unknown entry type")
+		return nil, errUnknownListEntryType
 	}
 
-	if err := e.setTime(fields[5:8], now); err != nil {
+	if err := e.setTime(fields[5:8], now, loc); err != nil {
 		return nil, err
 	}
 
@@ -145,14 +155,14 @@ func parseLsListLine(line string, now time.Time) (*Entry, error) {
 
 // parseDirListLine parses a directory line in a format based on the output of
 // the MS-DOS DIR command.
-func parseDirListLine(line string, now time.Time) (*Entry, error) {
+func parseDirListLine(line string, now time.Time, loc *time.Location) (*Entry, error) {
 	e := &Entry{}
 	var err error
 
 	// Try various time formats that DIR might use, and stop when one works.
 	for _, format := range dirTimeFormats {
 		if len(line) > len(format) {
-			e.Time, err = time.Parse(format, line[:len(format)])
+			e.Time, err = time.ParseInLocation(format, line[:len(format)], loc)
 			if err == nil {
 				line = line[len(format):]
 				break
@@ -189,7 +199,7 @@ func parseDirListLine(line string, now time.Time) (*Entry, error) {
 // by hostedftp.com
 // -r--------   0 user group     65222236 Feb 24 00:39 UABlacklistingWeek8.csv
 // (The link count is inexplicably 0)
-func parseHostedFTPLine(line string, now time.Time) (*Entry, error) {
+func parseHostedFTPLine(line string, now time.Time, loc *time.Location) (*Entry, error) {
 	// Has the first field a length of 10 bytes?
 	if strings.IndexByte(line, ' ') != 10 {
 		return nil, errUnsupportedListLine
@@ -203,14 +213,14 @@ func parseHostedFTPLine(line string, now time.Time) (*Entry, error) {
 	}
 
 	// Set link count to 1 and attempt to parse as Unix.
-	return parseLsListLine(fields[0]+" 1 "+scanner.Remaining(), now)
+	return parseLsListLine(fields[0]+" 1 "+scanner.Remaining(), now, loc)
 }
 
 // parseListLine parses the various non-standard format returned by the LIST
 // FTP command.
-func parseListLine(line string, now time.Time) (*Entry, error) {
+func parseListLine(line string, now time.Time, loc *time.Location) (*Entry, error) {
 	for _, f := range listLineParsers {
-		e, err := f(line, now)
+		e, err := f(line, now, loc)
 		if err != errUnsupportedListLine {
 			return e, err
 		}
@@ -223,11 +233,11 @@ func (e *Entry) setSize(str string) (err error) {
 	return
 }
 
-func (e *Entry) setTime(fields []string, now time.Time) (err error) {
+func (e *Entry) setTime(fields []string, now time.Time, loc *time.Location) (err error) {
 	if strings.Contains(fields[2], ":") { // contains time
 		thisYear, _, _ := now.Date()
-		timeStr := fmt.Sprintf("%s %s %d %s GMT", fields[1], fields[0], thisYear, fields[2])
-		e.Time, err = time.Parse("_2 Jan 2006 15:04 MST", timeStr)
+		timeStr := fmt.Sprintf("%s %s %d %s", fields[1], fields[0], thisYear, fields[2])
+		e.Time, err = time.ParseInLocation("_2 Jan 2006 15:04", timeStr, loc)
 
 		/*
 			On unix, `info ls` shows:
@@ -247,10 +257,10 @@ func (e *Entry) setTime(fields []string, now time.Time) (err error) {
 
 	} else { // only the date
 		if len(fields[2]) != 4 {
-			return errors.New("Invalid year format in time string")
+			return errUnsupportedListDate
 		}
-		timeStr := fmt.Sprintf("%s %s %s 00:00 GMT", fields[1], fields[0], fields[2])
-		e.Time, err = time.Parse("_2 Jan 2006 15:04 MST", timeStr)
+		timeStr := fmt.Sprintf("%s %s %s 00:00", fields[1], fields[0], fields[2])
+		e.Time, err = time.ParseInLocation("_2 Jan 2006 15:04", timeStr, loc)
 	}
 	return
 }

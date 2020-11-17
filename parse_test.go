@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -22,9 +24,15 @@ type line struct {
 	time      time.Time
 }
 
+type symlinkLine struct {
+	line   string
+	name   string
+	target string
+}
+
 type unsupportedLine struct {
 	line string
-	err  string
+	err  error
 }
 
 var listTests = []line{
@@ -34,7 +42,7 @@ var listTests = []line{
 	{"-rw-r--r--   1 marketwired marketwired    12016 Mar 16  2016 2016031611G087802-001.newsml", "2016031611G087802-001.newsml", 12016, EntryTypeFile, newTime(2016, time.March, 16)},
 
 	{"-rwxr-xr-x    3 110      1002            1234567 Dec 02  2009 fileName", "fileName", 1234567, EntryTypeFile, newTime(2009, time.December, 2)},
-	{"lrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", "bin -> usr/bin", 0, EntryTypeLink, newTime(thisYear, time.January, 25, 0, 17)},
+	{"lrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", "bin", 0, EntryTypeLink, newTime(thisYear, time.January, 25, 0, 17)},
 
 	// Another ls style
 	{"drwxr-xr-x               folder        0 Aug 15 05:49 !!!-Tipp des Haus!", "!!!-Tipp des Haus!", 0, EntryTypeFolder, newTime(thisYear, time.August, 15, 5, 49)},
@@ -72,51 +80,66 @@ var listTests = []line{
 
 	// Odd link count from hostedftp.com
 	{"-r--------   0 user group     65222236 Feb 24 00:39 RegularFile", "RegularFile", 65222236, EntryTypeFile, newTime(thisYear, time.February, 24, 0, 39)},
+
+	// Line with ACL persmissions
+	{"-rwxrw-r--+  1 521      101         2080 May 21 10:53 data.csv", "data.csv", 2080, EntryTypeFile, newTime(thisYear, time.May, 21, 10, 53)},
+}
+
+var listTestsSymlink = []symlinkLine{
+	{"lrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", "bin", "usr/bin"},
+	{"lrwxrwxrwx    1 0        1001           27 Jul 07  2017 R-3.4.0.pkg -> el-capitan/base/R-3.4.0.pkg", "R-3.4.0.pkg", "el-capitan/base/R-3.4.0.pkg"},
 }
 
 // Not supported, we expect a specific error message
 var listTestsFail = []unsupportedLine{
-	{"d [R----F--] supervisor            512       Jan 16 18:53 login", "Unsupported LIST line"},
-	{"- [R----F--] rhesus             214059       Oct 20 15:27 cx.exe", "Unsupported LIST line"},
-	{"drwxr-xr-x    3 110      1002            3 Dec 02  209 pub", "Invalid year format in time string"},
-	{"modify=20150806235817;invalid;UNIX.owner=0; movies", "Unsupported LIST line"},
-	{"Zrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", "Unknown entry type"},
-	{"total 1", "Unsupported LIST line"},
-	{"000000000x ", "Unsupported LIST line"}, // see https://github.com/jlaffaye/ftp/issues/97
-	{"", "Unsupported LIST line"},
+	{"d [R----F--] supervisor            512       Jan 16 18:53 login", errUnsupportedListLine},
+	{"- [R----F--] rhesus             214059       Oct 20 15:27 cx.exe", errUnsupportedListLine},
+	{"drwxr-xr-x    3 110      1002            3 Dec 02  209 pub", errUnsupportedListDate},
+	{"modify=20150806235817;invalid;UNIX.owner=0; movies", errUnsupportedListLine},
+	{"Zrwxrwxrwx   1 root     other          7 Jan 25 00:17 bin -> usr/bin", errUnknownListEntryType},
+	{"total 1", errUnsupportedListLine},
+	{"000000000x ", errUnsupportedListLine}, // see https://github.com/jlaffaye/ftp/issues/97
+	{"", errUnsupportedListLine},
 }
 
 func TestParseValidListLine(t *testing.T) {
 	for _, lt := range listTests {
-		entry, err := parseListLine(lt.line, now)
-		if err != nil {
-			t.Errorf("parseListLine(%v) returned err = %v", lt.line, err)
-			continue
-		}
-		if entry.Name != lt.name {
-			t.Errorf("parseListLine(%v).Name = '%v', want '%v'", lt.line, entry.Name, lt.name)
-		}
-		if entry.Type != lt.entryType {
-			t.Errorf("parseListLine(%v).EntryType = %v, want %v", lt.line, entry.Type, lt.entryType)
-		}
-		if entry.Size != lt.size {
-			t.Errorf("parseListLine(%v).Size = %v, want %v", lt.line, entry.Size, lt.size)
-		}
-		if !entry.Time.Equal(lt.time) {
-			t.Errorf("parseListLine(%v).Time = %v, want %v", lt.line, entry.Time, lt.time)
-		}
+		t.Run(lt.line, func(t *testing.T) {
+			assert := assert.New(t)
+			entry, err := parseListLine(lt.line, now, time.UTC)
+
+			if assert.NoError(err) {
+				assert.Equal(lt.name, entry.Name)
+				assert.Equal(lt.entryType, entry.Type)
+				assert.Equal(lt.size, entry.Size)
+				assert.Equal(lt.time, entry.Time)
+			}
+		})
+	}
+}
+
+func TestParseSymlinks(t *testing.T) {
+	for _, lt := range listTestsSymlink {
+		t.Run(lt.line, func(t *testing.T) {
+			assert := assert.New(t)
+			entry, err := parseListLine(lt.line, now, time.UTC)
+
+			if assert.NoError(err) {
+				assert.Equal(lt.name, entry.Name)
+				assert.Equal(lt.target, entry.Target)
+				assert.Equal(EntryTypeLink, entry.Type)
+			}
+		})
 	}
 }
 
 func TestParseUnsupportedListLine(t *testing.T) {
 	for _, lt := range listTestsFail {
-		_, err := parseListLine(lt.line, now)
-		if err == nil {
-			t.Errorf("parseListLine(%v) expected to fail", lt.line)
-		}
-		if err.Error() != lt.err {
-			t.Errorf("parseListLine(%v) expected to fail with error: '%s'; was: '%s'", lt.line, lt.err, err.Error())
-		}
+		t.Run(lt.line, func(t *testing.T) {
+			_, err := parseListLine(lt.line, now, time.UTC)
+
+			assert.EqualError(t, err, lt.err.Error())
+		})
 	}
 }
 
@@ -139,12 +162,12 @@ func TestSettime(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		entry := &Entry{}
-		entry.setTime(strings.Fields(test.line), now)
+		t.Run(test.line, func(t *testing.T) {
+			entry := &Entry{}
+			entry.setTime(strings.Fields(test.line), now, time.UTC)
 
-		if !entry.Time.Equal(test.expected) {
-			t.Errorf("setTime(%v).Time = %v, want %v", test.line, entry.Time, test.expected)
-		}
+			assert.Equal(t, test.expected, entry.Time)
+		})
 	}
 }
 
